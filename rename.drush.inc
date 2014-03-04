@@ -13,8 +13,9 @@ function rename_drush_command () {
   $items['rename-module'] = array(
     'description' => 'Renames a module and its hooks.',
     'options' => array(
-      'module' => 'The module that will be renamed',
-      'destination' => 'The full destination folder for the new module',
+      'old' => 'The module that will be renamed',
+      'new' => 'The new name of the module',
+      'destination' => 'The full path where the new module be copied into',
     ),
     'aliases' => array('mrn'),
     'bootstrap' => DRUSH_BOOTSTRAP_DRUPAL_FULL,
@@ -42,9 +43,10 @@ function rename_drush_command () {
 function rename_drush_help($section) {
   switch ($section) {
     case 'drush:module-rename':
-      return dt('Renames a module and its hooks. Usage is drush module-rename --module=fun --name=work');
+      return dt('Renames a module and its hooks. Usage is drush module-rename --old=fun --new=work --destination=sites/all/modules');
   }
 }
+
 
 /**
  * Run the actual renaming.
@@ -64,33 +66,30 @@ function rename_drush_help($section) {
  */
 function drush_rename_module($module = NULL, $name = NULL) {
 
-  $options = array(
-    'module' => drush_get_option('module'),
-    'destination' => drush_get_option('destination'),
-  );
-
-  if (!module_exists($options['module'])) {
+  $old = drush_get_option('old');
+  $new = drush_get_option('new');
+  if (!in_array($old, array_keys(system_rebuild_module_data())) || (!$old_path = drupal_get_path('module', $old))) {
     drush_set_error(dt('The module that was specified does not exist.'));
+    exit();
   }
-  else {
-    if (!empty($options['destination']) && !is_dir($options['destination'])) {
-      drush_mkdir($options['destination']);
-    }
-    else {
-      drush_print('The destination directory for the new module already exists, moving on.');
-    }
+  $destination =  drush_normalize_path(drush_get_option('destination', 'sites/all/modules/custom'));
+  $new_path = $destination . "/" . $new;
 
-    $path = drupal_get_path('module', $options['module']);
-    $files = scandir($path);
-
-    $name = array_reverse(explode('/', $options['destination']));
-
+  drush_log("renaming $old_path to $new_path", 'ok');
+  if (drush_copy_dir($old_path, $new_path, FILE_EXISTS_ABORT) ||
+    drush_confirm(dt("Do you want to DELETE the existing folder and recreate the copy? THIS MAY CAUSE DATA LOSS!", array('@dir' => $new_path))) &&
+    drush_copy_dir($old_path, $new_path, FILE_EXISTS_OVERWRITE)
+  ){
+    $files = drush_scan_directory($new_path, "/". $old ."/", array('.', '..', 'CVS'));
+    print_r($files);
     foreach($files as $file) {
-      $filename = explode('.', $file);
-      if (is_dir($options['destination']) && !empty($filename[1])) {
-        drush_shell_cd_and_exec($path, 'cp %s %s/%s', $file, $options['destination'], $filename[0] . '.' . $filename[1]);
-        //drush_print(print_r($filename));
+      $new_filename = str_replace($old, $new, $file->filename);
+      if (!rename($file->filename, $new_filename)) {
+        return FALSE;
       }
     }
+    $replace_cmd = "perl -pi -w -e 's/$old/$new/g;' *";
+    drush_log("running $replace_cmd in $new_path", 'ok');
+    drush_shell_cd_and_exec($new_path, $replace_cmd);
   }
 }
